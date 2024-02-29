@@ -1,0 +1,33 @@
+import os
+import importlib
+
+try:
+    auto_rigging_tool_root = os.environ['J_AUTO_RIGGING_DIR']
+except:
+    print('J_AUTO_RIGGING_DIR environment variable not correctly configured')
+else:
+    import sys
+    path = auto_rigging_tool_root
+
+
+    if not path in sys.path:
+        sys.path.append(path)
+
+    import system.UI.component_creator_UI as cc_UI
+    import importlib
+
+    importlib.reload(cc_UI)
+
+    # cmds.file(new=True, force=True)
+
+    try:
+        dialog.deleteLater()
+    except:
+        pass
+
+    dialog = cc_UI.ComponentCreatorUI()
+    dialog.show()
+
+
+# maya env
+J_AUTO_RIGGING_DIR = directory
