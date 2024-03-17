@@ -26,40 +26,83 @@ class ComponentContainer(Container):
 
     def get_output_node(self):
         install_node = self.get_install_node()
-        output_node = install_node["inputNode"].get_connection_list(asSource=True, asDestination=False)[0].node
+        output_node = install_node["outputNode"].get_connection_list(asSource=True, asDestination=False)[0].node
         return output_node
 
     def lock(self):
-        # publish attrs on input and output and publishAttrs
-        # delete publishAttrs attr
-
+        super(ComponentContainer, self).unlock(proprigate=True)
         try:
+            input_node = self.get_input_node()
+            output_node = self.get_output_node()
+            install_node = self.get_install_node()
 
-            print(self.get_install_node())
-            print(self.get_input_node())
-            print(self.get_output_node())
-        except:
-            pass
-        
+            self.publish_node_dynamic_attrs(self.get_input_node())
+            self.publish_node_dynamic_attrs(self.get_output_node())
 
-        super(ComponentContainer, self).lock()
+            self.add_node([self.get_input_node(), self.get_output_node(), self.get_install_node()])
+
+            self.lock_publish_attr()
+            
+            for node in self.get_children():
+                if node not in [input_node, output_node, install_node]:
+                    if not node.has_attr("parent"):
+                        node.add_attr("parent", type="message")
+                    install_node["otherNodes"] >> node["parent"]
+
+        finally:
+            super(ComponentContainer, self).lock(proprigate=True)
 
     def unlock(self):
         # add parent attr and connect
+        super(ComponentContainer, self).unlock(proprigate=True)
+        self.unlock_publish_attr()
+
+    def lock_publish_attr(self):
+        install_node = self.get_install_node()
+        if not install_node.has_attr("publishAttrs"):
+            return
+        publish_attr_connection_list = []
         
-        try:
-            print(self.get_published_attributes())
+        for attr in install_node["publishAttrs"]:
+            publish_attr_connection_list.extend(attr.get_dest_connection_list())
 
-            print(self.get_install_node())
-            print(self.get_input_node())
-            print(self.get_output_node())
-        except:
-            pass
+        non_add_node_list = [self.get_input_node(), self.get_output_node(), install_node]
+        current_published_list = self.get_published_attrs()
+        for attr in publish_attr_connection_list:
+            node = attr.node
+            if node not in non_add_node_list and attr not in current_published_list:
+                self.publish_attr(attr, "{}_{}".format(node.name, attr.attr_name))
 
-        super(ComponentContainer, self).lock()
+        for attr in install_node["publishAttrs"]:
+            ~attr
+        install_node.delete_attr("publishAttrs")
+
+    def unlock_publish_attr(self):
+        install_node = self.get_install_node()
+        input_node = self.get_input_node()
+        output_node = self.get_output_node()
+
+        if not install_node.has_attr("publishAttrs"):
+            install_node.add_attr("publishAttrs", type="message", multi=True)
+
+        publish_attr_dict = self.get_published_attr_map()
+        for index, attr in enumerate(publish_attr_dict.keys()):
+            if publish_attr_dict[attr].node not in [input_node, output_node, install_node]:
+                if install_node.has_attr("publishAttr"):
+                    publish_attr_dict[attr] >> install_node["publishAttr"][index]
+
+    def publish_node_dynamic_attrs(self, node:nw.Node):
+        published_attrs = self.get_published_attrs()
+        for attr in node.get_dynamic_attribute_list():
+            if attr not in published_attrs and attr.attr_name != "parent":
+                self.publish_attr(attr, "{}_{}".format(node.name, attr.attr_name))
+
+    def install_parent():
+        pass
 
 class Component:
     class ComponentTypes(Enum):
+        setup_component = "setup_component"
         anim_component = "anim_component"
         component_container = "container_component"
         control = "control_component"
@@ -132,7 +175,7 @@ class Component:
         self.install_node["outputNode"] >> output_node["parent"]
 
         # add to container
-        self.container_node.add_children([input_node, self.install_node, output_node])
+        self.container_node.add_node([input_node, self.install_node, output_node])
 
         # publish install attrs
         self._publish_install_attrs()
@@ -142,78 +185,6 @@ class Component:
 
     def publish(self, container_node):
         pass
-        # with container_node:
-            
-        #     container_children = container_node.get_children()
-        #     install_node = None
-        #     input_node = None
-        #     output_node = None
-            
-        #     for node in container_children:
-        #         if str(node).endswith("install"):
-        #             install_node = node
-        #         elif str(node).endswith("input"):
-        #             input_node = node
-        #         elif str(node).endswith("output"):
-        #             output_node = node
-
-        #     # error checking
-        #     if install_node is None:
-        #         raise RuntimeError("install node does not exist in {0}".format(str(container_node)))
-        #     if input_node is None:
-        #         raise RuntimeError("input node does not exist in {0}".format(str(container_node)))
-        #     if output_node is None:
-        #         raise RuntimeError("output node does not exist in {0}".format(str(container_node)))
-        #     if install_node["moduleType"].value == "":
-        #         raise RuntimeError("{0} attribute is empty".format(install_node["moduleType"]))
-        #     if install_node["nodePrefix"].value in [None, ""]:
-        #         cmds.warning("{0} attribute is empty".format(install_node["moduleType"]))
-            
-        #     # add other nodes
-        #     container_node.add_children([input_node, install_node, output_node])
-        #     container_children = container_node.get_children()
-
-        #     # add published attrs
-        #     publish_attr_set = set()
-        #     for attr in install_node["publishAttrs"]:
-        #         connection_list = attr.get_dest_connection_list()
-        #         for connection in connection_list:
-        #             # if connection.node.type == "container":
-        #             #     publish_attr_set.add(("{0}".format(connection.attr_short_name), str(connection)))
-        #             # publish_attr_set.add((connection, "{0}_{1}".format(str(connection.node), connection.attr_short_name)))
-        #             publish_attr_set.add((connection, connection.name.replace(".", "_")))
-
-        #     install_node.delete_attr("publishAttrs")
-
-        #     for attr, attr_bind_name in publish_attr_set:
-        #         container_node.publish_attr(attr, attr_bind_name)
-
-        #     for node in container_children:
-        #         if not node.has_attr("parent") and node != install_node:
-        #             node.add_attr("parent", type="message")
-        #             install_node["other"] >> node["parent"]   
-
-        #     install_exclude_list = ["container_children", "input", "output", "other", "publishAttrs"]
-        #     for attr in install_node.get_dynamic_attribute_list():
-        #         if attr.attr_name not in install_exclude_list:
-        #             container_node.publish_attr(attr, (attr.attr_name))
-
-        #     for attr in input_node.get_dynamic_attribute_list():
-        #         if attr.attr_name != "parent":
-        #             container_node.publish_attr(attr, "input_{0}".format(attr.attr_name))
-
-        #     for attr in output_node.get_dynamic_attribute_list():
-        #         if attr.attr_name != "parent":
-        #             container_node.publish_attr(attr, "output_{0}".format(attr.attr_name))
-            
-        #     node_prefix = install_node["nodePrefix"].value
-        #     if node_prefix == None:
-        #         node_prefix=""
-        #     for node in container_children:
-        #         self.rename_node(node, node_prefix) 
-
-
-        #     container_node.rename(self.new_name_convention("container", node_prefix))    
 
     # TODO
     # how to handle container attr being published

@@ -146,6 +146,12 @@ class Node():
         except ValueError:
             cmds.warning("{0} object not found".format(str(self)))
 
+    def get_container(self):
+        container = cmds.container(findContainer=self.full_name, query=True)
+        if container is not None:
+            return Node(container)
+        return container
+
     def get_top_level_attribute_list(self, reCache=False):
         """gets a list of top level attr for the node
 
@@ -266,11 +272,33 @@ class Container(Node):
         if child_nodes:
             return [Node(x) for x in child_nodes]
 
-    def lock(self):
-        cmds.lockNode(str(self), lock=True, lockUnpublished=True)
+    def lock(self, proprigate=False):
+        if proprigate:
+            container_list = []
+            current_container = self
+            while current_container is not None:
+                container_list.append(current_container)
+                current_container = current_container.get_container()
+        else:
+            container_list = [self]
 
-    def unlock(self):
-        cmds.lockNode(str(self), lock=False, lockUnpublished=False)
+        for container in container_list:
+            cmds.lockNode(str(container), lock=True, lockUnpublished=True)
+
+    def unlock(self, proprigate=False):
+        if proprigate:
+            container_list = []
+            current_container = self
+            while current_container is not None:
+                container_list.append(current_container)
+                current_container = current_container.get_container()
+
+        else:
+            container_list = [self]
+
+        container_list = container_list[::-1]
+        for container in container_list:
+            cmds.lockNode(str(container), lock=False, lockUnpublished=False)
 
     def __enter__(self):
         self.unlock()
@@ -279,7 +307,7 @@ class Container(Node):
     def __exit__(self, exception_type, exception_value, traceback):
         self.lock()
 
-    def add_children(self, add_nodes, include_network=True, include_hierarchy_above=True, include_hierarchy_below=True):
+    def add_node(self, add_nodes, include_network=True, include_hierarchy_above=True, include_hierarchy_below=True):
         if isinstance(add_nodes, list):
             for i in range(len(add_nodes)):
                 add_nodes[i] = str(add_nodes[i])
@@ -291,7 +319,7 @@ class Container(Node):
         if attr.node in self.get_children():
             cmds.container(str(self), edit=True, publishAndBind=[str(attr), attr_bind_name])
 
-    def get_published_attributes(self):
+    def get_published_attr_map(self):
 
         m_object = self.mobject
         if m_object.hasFn(om2.MFn.kContainer):
@@ -299,6 +327,14 @@ class Container(Node):
             plug_list, attr_list = mfn_container.getPublishedPlugs()
             return {x:Attr(None, y) for x, y in zip(attr_list, plug_list)}
         return {}
+
+    def get_published_attrs(self):
+        m_object = self.mobject
+        if m_object.hasFn(om2.MFn.kContainer):
+            mfn_container = om2.MFnContainerNode(m_object)
+            plug_list, _ = mfn_container.getPublishedPlugs()
+            return [Attr(None, x) for x in plug_list]
+        return []
 
     @classmethod
     def create_node(cls, name:str=None):

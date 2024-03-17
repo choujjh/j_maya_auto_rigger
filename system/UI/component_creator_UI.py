@@ -343,26 +343,35 @@ class AddAttrUI(util_ui.JBaseMayaDialog):
         self.enum_list_widget = AddEnumAttrWidget()
         self.enum_list_widget.reset_enum_items()
 
-        self.add_attr_btn = QtWidgets.QPushButton("Add Attribute")
-        self.delete_attr_btn = QtWidgets.QPushButton("Delete Attribute")
-        self.clear_attr_btn = QtWidgets.QPushButton("Clear Attribute")
+        self.add_attr_btn = QtWidgets.QPushButton()
+        self.delete_attr_btn = QtWidgets.QPushButton()
+        self.clear_attr_btn = QtWidgets.QPushButton()
+        self.add_attr_btn.setIcon(QtGui.QIcon(":item_add.png"))
+        self.delete_attr_btn.setIcon(QtGui.QIcon(":item_delete.png"))
+        self.clear_attr_btn.setIcon(QtGui.QIcon(":clearAll.png"))
+        QtGui.QIcon
         self.add_all_attrs_btn = QtWidgets.QPushButton("Add All Attributes")
     def create_layout(self):
 
         # button layout
-        button_layout = QtWidgets.QHBoxLayout()
+        button_layout = QtWidgets.QVBoxLayout()
         button_layout.setContentsMargins(0, 0, 0, 0)
         button_layout.addWidget(self.add_attr_btn)
         button_layout.addWidget(self.delete_attr_btn)
         button_layout.addWidget(self.clear_attr_btn)
+        button_layout.addStretch()
 
+        # button with tree
+        tree_layout = QtWidgets.QHBoxLayout()
+        tree_layout.setContentsMargins(0, 0, 0, 0)
+        tree_layout.addLayout(button_layout)
+        tree_layout.addWidget(self.add_attr_tree)
 
         # inner layout
         inner_layout = QtWidgets.QVBoxLayout()
         inner_layout.setContentsMargins(10, 10, 10, 10)
-        inner_layout.addWidget(self.add_attr_tree)
+        inner_layout.addLayout(tree_layout)
         inner_layout.addWidget(self.enum_list_widget)
-        inner_layout.addLayout(button_layout)
         self.enum_list_widget.hide()
 
         # creating border for inner layout
