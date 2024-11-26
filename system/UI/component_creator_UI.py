@@ -3,25 +3,27 @@ import maya.cmds as cmds
 from PySide2 import QtCore
 from PySide2 import QtWidgets
 from PySide2 import QtGui
-import re
-
-import utils.node_wrapper as nw
-import system.component as component
-import utils.ui as util_ui
+import utils.ui as util_uis
 import utils.cmds as util_cmds
+import utils.enum as util_enums
+import utils.node_wrapper as nw
+import components.character_component as character_components
+import components.anim_component as anim_components
+import system.base_components as base_components
+import components.components as components
 
-import importlib
-importlib.reload(nw)
-importlib.reload(component)
-importlib.reload(util_ui)
-importlib.reload(util_cmds)
 
+import re
+from functools import partial
+
+
+"""
 class AttrTreeWidget(QtWidgets.QTreeWidget):
     class AttrTreeItem(QtWidgets.QTreeWidgetItem):
         def __init__(self, parent, dropdown_connection, item_name=None, item_type=0, item_multi_checked=False):
             super(AttrTreeWidget.AttrTreeItem, self).__init__(parent)
 
-            self._dropdown_options = ["bool", "compound", "enum", "float", "int", "matrix", "mesh", "message", "nurbsCurve", "nurbsSurface", "string"]
+            self._dropdown_options = ["bool", "compound", "double2", "double3", "enum", "float", "int", "matrix", "mesh", "message", "nurbsCurve", "nurbsSurface", "string"]
 
             self.enum_attributes = None
             self.attr_type_combo_box = None
@@ -187,7 +189,7 @@ class AttrTreeWidget(QtWidgets.QTreeWidget):
         for item in selected_items:
             item_parent = item.parent()
             if item_parent is not None:
-                if item_parent.get_values()["type_string"] != "compound":
+                if item_parent.get_values()["type_string"] not in ["compound", "double3", "double2"]:
                     item_parent.unparent_children()
 
             self.setCurrentIndex(self.indexFromItem(item))
@@ -330,8 +332,8 @@ class AddEnumAttrWidget(QtWidgets.QWidget):
     def get_enum_list_values(self):
         return [self.enum_list_widget.item(x).text() for x in range(self.enum_list_widget.count())]
 
-class AddAttrUI(util_ui.JBaseMayaDialog):
-    def __init__(self, parent=util_ui.maya_main_window()):
+class AddAttrUI(utils_ui.JBaseMayaDialog):
+    def __init__(self, parent=utils_ui.maya_main_window()):
         super(AddAttrUI, self).__init__("Attr Creator", parent)
         self.setMinimumWidth(450)
         self.setMinimumHeight(200)
@@ -431,29 +433,283 @@ class AddAttrUI(util_ui.JBaseMayaDialog):
 
     def add_all_attr(self):
         add_attr_args_list = self.add_attr_tree.generate_attribute_parameters()
-        selection = util_cmds.ls(sl=True)
+        selection = utils_cmds.ls(sl=True)
         for obj in selection:
             for add_attr_args in add_attr_args_list:
                 obj.add_attr(**add_attr_args)
-
-class ComponentCreatorUI(util_ui.JBaseMayaDialog):
-    def __init__(self, parent=util_ui.maya_main_window()):
+"""
+class ComponentCreatorUI(util_uis.JBaseMayaDialog):
+    def __init__(self, parent=util_uis.maya_main_window()):
+        self.current_ui_component = None
+        self._component_info_widgets = []
         super(ComponentCreatorUI, self).__init__("Component Creator", parent)
+
+    def create_widgets(self):
+        self.character_component_list_wdg = util_uis.ComponentListUI("Character Components")
+        self.animation_component_list_wdg = util_uis.ComponentListUI("Animation Components")
+
+        self.parent_btn = QtWidgets.QPushButton("Parent")
+        self.rename_btn = QtWidgets.QPushButton("Rename")
+        self.delete_btn = QtWidgets.QPushButton("Delete")
+        self.mirror_shape_btn = QtWidgets.QPushButton("Mirror Shape")
+        self.mirror_btn = QtWidgets.QPushButton("Mirror")
+        self.parent_shape_btn = QtWidgets.QPushButton("Parent Shape")
+        self.publish_btn = QtWidgets.QPushButton("Publish")
+        self.build_btn = QtWidgets.QPushButton("Build")
+
+    def create_layout(self):
+        content_margins = 10
+
+        component_layout = QtWidgets.QVBoxLayout()
+        component_layout.addWidget(self.character_component_list_wdg)
+        component_layout.addWidget(self.animation_component_list_wdg)
+
+        button_grid_layout = QtWidgets.QGridLayout()
+        # button_grid_layout.addWidget(self.parent_btn, 0, 0)
+        # button_grid_layout.addWidget(self.rename_btn, 0, 1)
+        # button_grid_layout.addWidget(self.delete_btn, 0, 2)
+        # button_grid_layout.addWidget(self.mirror_shape_btn, 1, 0)
+        # button_grid_layout.addWidget(self.mirror_btn, 1, 1)
+        # button_grid_layout.addWidget(self.parent_shape_btn, 1, 2)
+        # button_grid_layout.addWidget(self.publish_btn, 2, 0)
+        # button_grid_layout.addWidget(self.build_btn, 2, 1)
+
+        button_grid_layout.addWidget(self.parent_btn, 0, 0)
+        button_grid_layout.addWidget(self.mirror_btn, 0, 1)
+        button_grid_layout.addWidget(self.build_btn, 0, 2)
+        
+        self.char_info_layout = QtWidgets.QVBoxLayout()
+        self.char_info_layout.setContentsMargins(5, 5, 5, 5)
+        self.char_info_layout.setSpacing(5)
+
+        self.component_info_layout = QtWidgets.QVBoxLayout()
+        self.component_info_layout.setContentsMargins(5, 5, 5, 5)
+        self.component_info_layout.setSpacing(5)
+        
+        info_layout = QtWidgets.QVBoxLayout()
+        info_layout.addWidget(QtWidgets.QLabel("Character Attributes"))
+        info_layout.addWidget(util_uis.JBorderWidget(layout=self.char_info_layout))
+        info_layout.addWidget(QtWidgets.QLabel("Component Attributes"))
+        info_layout.addWidget(util_uis.JBorderWidget(layout=self.component_info_layout))
+        info_layout.addStretch()
+        info_layout.addLayout(button_grid_layout)
+
+        layout = QtWidgets.QHBoxLayout()
+        layout.setContentsMargins(*[content_margins for x in range(4)])
+        layout.addLayout(component_layout)
+        layout.addLayout(info_layout)
+
+        self.setLayout(layout)
+
+    def create_connections(self):
+        self.character_component_list_wdg.add_btn.clicked.connect(self.add_character_component)
+        self.character_component_list_wdg.delete_btn.clicked.connect(self.character_component_list_wdg.delete_current_component)
+        self.character_component_list_wdg.table_wdg.currentCellChanged.connect(self.refresh_anim_components)
+        self.character_component_list_wdg.table_wdg.currentCellChanged.connect(partial(self.update_component_info, self.character_component_list_wdg))
+
+        self.animation_component_list_wdg.add_btn.clicked.connect(self.initialize_anim_component)
+        self.animation_component_list_wdg.delete_btn.clicked.connect(self.animation_component_list_wdg.delete_current_component)
+        self.animation_component_list_wdg.table_wdg.currentCellChanged.connect(partial(self.update_component_info, self.animation_component_list_wdg))
+
+        # button connections
+        self.parent_btn.clicked.connect(self.parent_btn_action)
+        self.mirror_btn.clicked.connect(self.mirror_btn_action)
+        self.build_btn.clicked.connect(self.build_btn_action)
+
+    def update_component_info(self, component_list_wdg, *args):
+        #see if it can be built
+        self.current_ui_component = component_list_wdg.get_current_component()
+        io_node = self.current_ui_component.io_node
+
+        for component_wdg in self._component_info_widgets:
+            component_wdg.deleteLater()
+        self._component_info_widgets = []
+
+        character_component = self.character_component_list_wdg.get_current_component()
+        char_attrs = [character_component.container_node[x] for x in ["setupGrpVisibility", "animGrpVisibility", "hierGrpVisibility"]]
+        for char_attr in char_attrs:
+            self._component_info_widgets.append(util_uis.AttrItem(char_attr))
+            self.char_info_layout.addWidget(self._component_info_widgets[-1])
+
+        for attr in self.current_ui_component.get_component_ui_attrs():
+            self._component_info_widgets.append(util_uis.AttrItem(attr))
+            self.component_info_layout.addWidget(self._component_info_widgets[-1])
+
+        # set buttons
+        if self.current_ui_component is None or io_node["built"].value:
+            self.build_btn.setEnabled(False)
+        else:
+            self.build_btn.setEnabled(True)
+
+        # set mirror
+        if self.current_ui_component is None or not io_node["built"].value:
+            self.mirror_btn.setEnabled(False)
+        else:
+            is_mirrorable = self.current_ui_component.mirror_dest_container == None and self.current_ui_component.mirror_source_container == None and type(self.current_ui_component).component_type == util_enums.ComponentTypes.anim
+            self.mirror_btn.setEnabled(is_mirrorable)
+
+        # set parent
+        # component_has_parent self._curr_selected_component(util_enums.)
+
+    def parent_btn_action(self, *args):
+        selection = [nw.Node(x) for x in cmds.ls(sl=True, long=True)]
+        if len(selection) < 2:
+            cmds.warning("need to select at least 2 setup objects")
+            return
+        
+        # getting parent all set up 
+        parent = selection.pop(-1)
+        parent_container = parent
+        if parent.node_type != "container":
+            parent_container = parent.get_container()
+        parent_inst = base_components.get_component(parent_container)
+        parent_setup_inst = parent_inst.get_parent_component_of_type(util_enums.ComponentTypes.setup)
+
+        # checking to see if it's in setup component
+        if parent_setup_inst is None:
+            cmds.warning("{} is not a setup control".format(parent))
+            return
+
+        # getting anim attr
+        anim_inst = parent_inst.get_parent_component_of_type(util_enums.ComponentTypes.anim)
+        if anim_inst is None:
+            cmds.warning("{} does not have a parent anim component".format(parent))
+            return
+        parent_attr = None
+
+        for x in parent_container["worldMatrix"].get_as_source_connection_list():
+            if x.attr_name.startswith("hier["):
+                parent_attr = x
+                break
+        if parent_attr is None:
+            cmds.warning("hier attr not found")
+            return
+        parent_attr_name = parent_attr.attr_name.rsplit(".")[0]
+        if not anim_inst.container_node.has_attr(parent_attr_name):
+            cmds.warning("{}.{} not found".format(anim_inst.component_container, parent_attr_name))
+        parent_anim_attr = anim_inst.container_node[parent_attr_name]
+        
+        # parenting everything else
+        parented_instances = [parent_inst]
+        for curr in selection:
+            curr_container = curr
+            
+            if curr.node_type != "container":
+                curr_container = curr.get_container()
+
+            curr_inst = base_components.get_component(curr_container)
+            curr_inst = curr_inst.get_parent_component_of_type(util_enums.ComponentTypes.anim)
+            if curr_inst is None:
+                cmds.warning("{} does not have a parent anim component".format(curr))
+                parented_instances.append(curr_inst)
+            else:
+                if curr_inst not in parented_instances:
+                    curr_inst.parent(parent_anim_attr)
+                    parented_instances.append(curr_inst)
+
+    def mirror_btn_action(self, *args):
+        mirror_window = util_uis.MirrorPlane(parent=self)
+        mirror_window.exec_()
+
+        if mirror_window.return_axis is not None:
+            mirror_inst = self.current_ui_component.mirror_component(direction=mirror_window.return_axis, dynamic=True)
+            char_inst = self.character_component_list_wdg.get_current_component()
+
+            hier_inst = components.HierComponent.get_instance(char_inst)
+            hier_inst.add_hiers(mirror_inst)
+
+            self.current_ui_component.mirror_component_input_connections()
+            self.refresh_anim_components()
+        
+    def build_btn_action(self, *args):
+        self.current_ui_component.build_component()
+
+        anim_inst = self.current_ui_component
+
+        char_inst = self.character_component_list_wdg.get_current_component()
+        hier_inst = components.HierComponent.get_instance(char_inst)
+        hier_inst.add_hiers(anim_inst)
+
+
+        self.refresh_anim_components()
+
+    def add_character_component(self):
+        char_class = self.open_component_window(character_components)
+        if char_class is None:
+            return
+        char_inst = char_class()
+
+        char_inst.create_component()
+
+
+        self.character_component_list_wdg.add_component_info(char_inst)
+
+        self.refresh_anim_components()
+
+    def initialize_anim_component(self):
+        #check for character class
+        anim_class = self.open_component_window(anim_components)
+        if anim_class is None:
+            return
+
+        # insert into character class
+        char_inst = self.character_component_list_wdg.get_current_component()
+        char_inst.insert_component(anim_class, hier_parent=char_inst.root_cntrl_node["worldMatrix"][0], build=False)
+
+        # refresh anim components
+        self.refresh_anim_components()
+
+    def refresh_anim_components(self):
+        char_inst = self.character_component_list_wdg.get_current_component()
+        anim_components = char_inst.get_child_component_of_type(util_enums.ComponentTypes.anim)
+
+        self.animation_component_list_wdg.add_component_info(*anim_components, clear_prev_entries=True)
+
+    def open_component_window(self, module):
+        curr = util_uis.SelectComponentUI(parent=self, module=module)
+        curr.exec_()
+        if curr.return_class is None:
+            return None
+        return getattr(module, curr.return_class)
+    
+    def _curr_selected_component(self, component_type):
+        sel = cmds.ls(sl=True, ln=True)
+        if len(sel) < 0:
+            return None
+        sel = nw.Node(sel[0])
+        if sel.node_type=="container":
+            component = base_components.get_component(nw.Container(sel))
+            if component is None:
+                return None
+            return component.get_parent_component_of_type(component_type)
+
+"""
+class ComponentCreatorUI(util_ui.JBaseMayaDialog):
+
+    def __init__(self, parent=util_ui.maya_main_window()):
         self._add_attr_window = None
         self._selection_sj = -1
         self._container_attr_link_sj_list = []
+        self._install_node = None
+        self._component_container = None
+        super(ComponentCreatorUI, self).__init__("Component Creator", parent)
+
+        # init ui
+        self.update_refs()
+        self.update_ui_container_info()
 
     def create_widgets(self):
         column_spacing = [105, 150]
         self.container_name_wgt = util_ui.JLabeledWidget(QtWidgets.QLineEdit(), "Container:", spacing=column_spacing)
         self.container_name_wgt.other_widget.setEnabled(False)
-        self.user_defined_name_wgt = util_ui.JLabeledWidget(QtWidgets.QLineEdit(), "User Defined Name:", spacing=column_spacing)
+        self.instance_name_wgt = util_ui.JLabeledWidget(QtWidgets.QLineEdit(), "Instance Name:", spacing=column_spacing)
         self.component_name_wgt = util_ui.JLabeledWidget(QtWidgets.QLineEdit(), "Component Name:", spacing=column_spacing)
-        self.module_type_wgt = util_ui.JLabeledWidget(QtWidgets.QComboBox(), "Component Type:", spacing=column_spacing)
-        self.module_type_wgt.other_widget.addItems(component.Component.ComponentTypes.get_component_type_names())
+        self.component_type_wgt = util_ui.JLabeledWidget(QtWidgets.QComboBox(), "Component Type:", spacing=column_spacing)
+        self.component_type_wgt.other_widget.addItems(component_old.Component.ComponentTypes.get_component_type_names())
 
         self.create_template_btn = QtWidgets.QPushButton("Create Template")
         self.rename_btn = QtWidgets.QPushButton("Rename")
+        self.add_freeze_btn = QtWidgets.QPushButton("Add Freeze")
         self.lock_container_btn = QtWidgets.QPushButton("Lock Container")
         self.unlock_container_btn = QtWidgets.QPushButton("Unlock Container")
 
@@ -466,15 +722,16 @@ class ComponentCreatorUI(util_ui.JBaseMayaDialog):
         container_layout = util_ui.JBorderWidget()
         container_layout.layout.setContentsMargins(5, 5, 5, 5)
         container_layout.layout.addWidget(self.container_name_wgt)
-        container_layout.layout.addWidget(self.user_defined_name_wgt)
+        container_layout.layout.addWidget(self.instance_name_wgt)
         container_layout.layout.addWidget(self.component_name_wgt)
-        container_layout.layout.addWidget(self.module_type_wgt)
+        container_layout.layout.addWidget(self.component_type_wgt)
 
         container_options_layout = QtWidgets.QGridLayout()
         container_options_layout.addWidget(self.create_template_btn, 0, 0)
         container_options_layout.addWidget(self.rename_btn, 0, 1)
-        container_options_layout.addWidget(self.lock_container_btn, 1, 0)
-        container_options_layout.addWidget(self.unlock_container_btn, 1, 1)
+        container_options_layout.addWidget(self.add_freeze_btn, 1, 0)
+        container_options_layout.addWidget(self.lock_container_btn, 2, 0)
+        container_options_layout.addWidget(self.unlock_container_btn, 2, 1)
         
         container_layout.layout.addLayout(container_options_layout)
 
@@ -486,29 +743,40 @@ class ComponentCreatorUI(util_ui.JBaseMayaDialog):
         self.setLayout(layout)
 
     def create_connections(self):
-        self.create_template_btn.clicked.connect(self.create_template_cmd)
-        self.publish_btn.clicked.connect(ComponentCreator.publish_template)
-        self.add_attr_btn.clicked.connect(self.create_add_attr_window)
-        self.lock_container_btn.clicked.connect(ComponentCreator.lock_container)
-        self.unlock_container_btn.clicked.connect(ComponentCreator.unlock_container)
+        self.create_template_btn.clicked.connect(self.create_template_act)
+        self.rename_btn.clicked.connect(self.rename_container_nodes)
 
+        self.add_freeze_btn.clicked.connect(self.add_freeze)
+
+        self.lock_container_btn.clicked.connect(self.lock_container_act)
+        self.unlock_container_btn.clicked.connect(self.unlock_container_act)
+
+        self.add_attr_btn.clicked.connect(self.create_add_attr_window)
+        self.publish_btn.clicked.connect(self.publish_container)
+
+    def create_template_act(self):
+        ComponentCreator.create_template(self.component_type_wgt.other_widget.currentIndex())
+    def rename_container_nodes(self):
+        ComponentCreator.rename_container_nodes(self._component_container)
+    def add_freeze(self):
+        ComponentCreator.add_freeze_input(self._component_container)
+    def lock_container_act(self):
+        ComponentCreator.lock_container(self._component_container)
+    def unlock_container_act(self):
+        ComponentCreator.unlock_container(self._component_container)
     def create_add_attr_window(self):
         if self._add_attr_window is None:
             self._add_attr_window = AddAttrUI(parent=self)
         self._add_attr_window.show()
-
-    def create_template_cmd(self):
-        ComponentCreator.create_template(self.module_type_wgt.other_widget.currentIndex())
-
-    def publish_template_cmd(self):
-        ComponentCreator.publish_template()
+    def publish_container(self):
+        ComponentCreator.publish_container(self._component_container)
 
     def showEvent(self, event):
-        # self.create_selection_sj()
+        self.create_selection_sj()
         return super(ComponentCreatorUI, self).showEvent(event)
 
     def hideEvent(self, event):
-        # self.delete_selection_sj()
+        self.delete_selection_sj()
         if self._add_attr_window is not None:
             self._add_attr_window.hide()
         return super(ComponentCreatorUI, self).hideEvent(event)
@@ -517,51 +785,182 @@ class ComponentCreatorUI(util_ui.JBaseMayaDialog):
         if cmds.scriptJob(exists=self._selection_sj):
             cmds.scriptJob(kill=self._selection_sj)
         self._selection_sj = cmds.scriptJob(event=["SelectionChanged", self.update_container_attr_sj_list])
+
     def delete_selection_sj(self):
         if cmds.scriptJob(exists=self._selection_sj):
             cmds.scriptJob(kill=self._selection_sj)
+
+    def get_component_container(self):
+        selection = util_cmds.ls(sl=True)
+        for node in selection:
+            if node.type == "container":
+                return node
+            container = node.get_container()
+            if container is not None:
+                return container
+    
+    def update_refs(self):
+        self._component_container = self.get_component_container()
+        if self._component_container is not None and self._component_container.has_attr("installNode"):
+            self._install_node = self._component_container["installNode"].get_source_connection_list()[0].node
+
     def update_container_attr_sj_list(self):
-        for sj in self._container_attr_link_sj_list:
-            if cmds.scriptJob(exists=sj):
-                cmds.scriptJob(kill=sj)
-        self._container_attr_link_sj_list = []
-        print("update_container_attr_sj_list")
-        print(cmds.ls(sl=True))
-        pass
+        self.update_refs()
+        self.update_ui_container_info()
+
     def update_ui_container_info(self):
-        pass
-        print("update_ui_container_info")
-        print(cmds.ls(sl=True))
 
+        self.container_name_wgt.other_widget.setText("")
+        self.instance_name_wgt.other_widget.setText("")
+        self.component_name_wgt.other_widget.setText("")
+        self.component_type_wgt.other_widget.setCurrentIndex(0)
 
+        if self._component_container is not None and self._install_node is not None:
+            self.container_name_wgt.other_widget.setText(str(self._component_container))
+
+            install_attrs = [(self.instance_name_wgt, self._install_node["instanceName"].value),
+                                (self.component_name_wgt, self._install_node["componentName"].value)]
+
+            for line_edit, value in install_attrs:
+                if value is None:
+                    value = ""
+                line_edit.other_widget.setText(value)
+            self.component_type_wgt.other_widget.setCurrentIndex(self._install_node["componentType"].value)
         
 class ComponentCreator():
     @classmethod
     def create_template(cls, component_type):
-        component_template = component.Component()
-        component_template.install()
+        # check to see what type it is
+        component_type = component_old.Component.ComponentTypes.get(component_type)
+        print(component_type)
+        if component_type == "control_component":
+            component_inst = component_old.ControlComponent()
+
+        else:
+            component_inst = component_old.Component()
+        component_inst.create_template()
 
     @classmethod
-    def is_container(cls, object):
-        return cmds.objectType(object) == "container"
+    def publish_container(cls, container):
+        # check to see if name is already taken
+        # warning if component name is empty
+        if container is not None:
+            component_inst = component_old.Component(container_node=container)
+            component_inst.publish()
+    @classmethod
+    def lock_container(cls, container):
+        if container is not None:
+            component_old.ComponentContainer(str(container)).lock()
+    @classmethod
+    def unlock_container(cls, container):
+        if container is not None:
+            component_old.ComponentContainer(str(container)).unlock()
+    @ classmethod
+    def rename_container_nodes(cls, container):
+        if container is not None:
+            component_inst = component_old.Component(container_node=container)
+            component_inst.rename_component()
 
     @classmethod
-    def publish_template(cls):
-        pass
-        # component_template = component.Component("tempName", None)
-        # selection = cmds.ls(sl=True)
-        # if len(selection) > 0:
-        #     if cls.is_container(selection[0]):
-        #         component_template.publish(nw.Container(selection[0]))
-    @classmethod
-    def lock_container(cls):
-        selection = cmds.ls(sl=True)
-        if len(selection) > 0:
-            if cls.is_container(selection[0]):
-                component.ComponentContainer(selection[0]).lock()
-    @classmethod
-    def unlock_container(cls, object):
-        selection = cmds.ls(sl=True)
-        if len(selection) > 0:
-            if cls.is_container(selection[0]):
-                component.ComponentContainer(selection[0]).unlock()
+    def add_freeze_input(cls, container):
+        if container is not None:
+            component_inst = component_old.Component(container_node=container)
+            component_inst.add_freeze_component()
+"""
+"""
+from PySide2 import QtGui
+from PySide2.QtGui import *
+from PySide2.QtCore import *
+from PySide2.QtWidgets import *
+from PySide2.QtUiTools import *
+import shiboken2
+
+widgets = {}
+try:
+    widgets = {widget.objectName(): widget for widget in QApplication.allWidgets()}
+except Exception:
+    pass
+_widget = widgets.get("MayaWindow", None)
+
+
+class dataDialog(QDialog):
+    
+    dataReturned = Signal(str)
+    def __init__(self, parent = None):
+        super().__init__(parent)
+        
+        self.returnData = None
+        self.addWidgets()
+    
+    def addWidgets(self):
+        self.setLayout(QVBoxLayout())
+        self.radioButtons  = [QRadioButton("my info 1"), QRadioButton("my info 2"), QRadioButton("my info 3")]
+        for radioButton in self.radioButtons:
+            self.layout().addWidget(radioButton )
+        
+        h = QHBoxLayout()
+        confirmButton = QPushButton("confirm")
+        cancelButton = QPushButton("cancel")
+        h.addWidget(confirmButton )
+        h.addWidget(cancelButton )
+        
+        confirmButton.clicked.connect(self.confirmRadioButton)
+        cancelButton.clicked.connect(self.close)
+        
+        self.layout().addLayout(h)
+        
+    def confirmRadioButton(self):
+        for radioButton in self.radioButtons:
+            if radioButton.isChecked():
+                self.returnData = radioButton.text()
+                self.dataReturned.emit(radioButton.text())
+        self.close()
+        
+
+class myWindow(QMainWindow):
+    def __init__(self, parent=_widget):
+        super().__init__(parent)
+        
+        self.data = None
+        self.data1 = None
+        self.addWidgets()
+    
+    def addWidgets(self):
+        w = QWidget()
+        w.setLayout(QVBoxLayout())
+        self.setCentralWidget(w)
+        
+        self.button = QPushButton("spawn Window")
+        self.button.clicked.connect(self.spawnWindow)
+        self.button2 = QPushButton("spawn Window")
+        self.button2.clicked.connect(self.spawnWindow1)
+        self.button1 = QPushButton("print data")
+        self.button1.clicked.connect(self.printData)
+        
+        w.layout().addWidget(QLabel("to open dialog"))
+        w.layout().addWidget(self.button)
+        w.layout().addWidget(self.button2)
+        w.layout().addWidget(QLabel("to print the data"))
+        w.layout().addWidget(self.button1)
+        
+    def spawnWindow(self):
+        dlg = dataDialog(self)
+        dlg.exec_()
+        self.data = dlg.returnData
+        
+    def spawnWindow1(self):
+        dlg = dataDialog(self)
+        dlg.dataReturned.connect(self.gatherData)
+        dlg.exec_()
+    
+    def gatherData(self, inString):
+        self.data1 = inString
+
+    def printData(self):
+        print(self.data)
+        print(self.data1)
+        
+        
+a = myWindow()
+a.show()
+"""

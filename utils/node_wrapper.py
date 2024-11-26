@@ -1,13 +1,14 @@
 from maya.api import OpenMaya as om2
 import maya.cmds as cmds
 from typing import Union
-import utils.open_maya as om_utils
+import utils.utils as utils
 import utils.apiundo as apiundo
-import utils.cmds as system_cmds
 
-
-# import importlib
-# importlib.reload(system_cmds)
+def derive_node(arg):
+    node = Node(arg)
+    if node.node_type == "container":
+        return Container(node)
+    return node
 
 class Node():
     """
@@ -29,7 +30,7 @@ class Node():
             if not cmds.objExists(node):
                 cmds.error("node {0} does not exist".format(node))
                 return
-        self._dep_node = om_utils.get_dep_node(node)
+        self._dep_node = utils.get_dep_node(node)
         self.__attr_cache = {}
         self.__full_attr_list = None
     
@@ -44,7 +45,7 @@ class Node():
             return self.full_name.rsplit("|", 1)[1]
         return self.full_name
     @property
-    def type(self):
+    def node_type(self):
         return self._dep_node.typeName
     @property
     def mobject(self):
@@ -62,8 +63,19 @@ class Node():
             return Node(cmds.createNode(node_type, name=name))
         return Node(cmds.createNode(node_type))
     
+    @staticmethod
+    def exists(node):
+        return cmds.objExists(str(node))
+
     def has_attr(self, attr_name):
-        return self._dep_node.hasAttribute(attr_name)
+        try:
+            self.__getitem__(attr_name)
+            return True
+        except:
+            return False
+
+    def obj_exists(self):
+        return cmds.objExists(str(self))
 
     def add_attr(self, long_name="", **kwargs):
         if "parent" in kwargs.keys():
@@ -84,72 +96,103 @@ class Node():
             kwargs["dataType"] = attr_type
 
         # attributeType attribute
-        elif attr_type in ["compound", "message", "double", "long", "bool", "enum"]:
+        elif attr_type in ["compound", "message", "double", "long", "bool", "enum", "double3", "double2"]:
             kwargs["attributeType"] = attr_type
 
-        cmds.addAttr(str(self), longName=long_name, **kwargs)
+        new_kwargs = {}
+        for key in kwargs:
+            new_kwargs[utils.snake_to_camel(key)] = kwargs[key]
+
+        cmds.addAttr(str(self), longName=long_name, **new_kwargs)
+        
 
     def delete_attr(self, attr):
         cmds.deleteAttr(str(self), at=attr)
 
     def get_connection_list(self, asSource, asDestination):
-        connection_list = []
+        connections = set()
+        if asSource:
+            connection_list = cmds.listConnections(str(self), connections=True, source=True, destination=False, plugs=True)
+            if connection_list is not None:
+                connection_list = [(Attr(None, x), Attr(self, y)) for x, y in zip(connection_list[1::2], connection_list[::2])]
+                connections.update(connection_list)
+        if asDestination:
+            connection_list = cmds.listConnections(str(self), connections=True, source=False, destination=True, plugs=True)
+            if connection_list is not None:
+                connection_list = [(Attr(self, x), Attr(None, y)) for x, y in zip(connection_list[::2], connection_list[1::2])]
+                connections.update(connection_list)
+        if self.node_type == "container":
+            self_container = Container(self)
+            published_attrs = self_container.get_published_attrs()
 
-        for attr in self.get_top_level_attribute_list():
-            if asSource:
-                attr_connection_list = attr.get_connection_list(True, False)
-                if attr_connection_list != []:
-                    connection_list.extend([(attr, x) for x in attr_connection_list])
-            if asDestination:
-                attr_connection_list = attr.get_connection_list(False, True)
-                if attr_connection_list != []:
-                    connection_list.extend([(x, attr) for x in attr_connection_list])
-            if attr.has_children():
-                for attr_child in attr:
-                    if asSource:
-                        attr_connection_list = attr_child.get_connection_list(True, False)
-                        if attr_connection_list != []:
-                            connection_list.extend([(attr_child, x) for x in attr_connection_list])
-                    if asDestination:
-                        attr_connection_list = attr_child.get_connection_list(False, True)
-                        if attr_connection_list != []:
-                            connection_list.extend([(x, attr_child) for x in attr_connection_list])
-        return connection_list
+            connections = [x for x in connections if x[0] not in published_attrs and x[1] not in published_attrs]
+        connections = [x for x in connections if x[0].node.node_type != "hyperLayout" and x[1].node.node_type != "hyperLayout"]
+        return connections
+
+    def _check_node_in_attr_list(self, attribute_list):
+        if attribute_list:
+            attribute_list = [self[x] for x in attribute_list]
+            attribute_list = [x for x in attribute_list if x.node == self]
+            return attribute_list
+        return []
 
     def get_keyable_attribute_list(self):
         attribute_list = cmds.listAttr(str(self), keyable=True)
-        if attribute_list:
-            return [self[x] for x in attribute_list]
-        return []
+        return self._check_node_in_attr_list(attribute_list)
     def get_unlocked_attribute_list(self):
         attribute_list = cmds.listAttr(str(self), unlocked=True)
-        if attribute_list:
-            return [self[x] for x in attribute_list]
-        return []
+        return self._check_node_in_attr_list(attribute_list)
     def get_dynamic_attribute_list(self):
         attribute_list = cmds.listAttr(str(self), userDefined=True)
-        if attribute_list:
-            return [self[x] for x in attribute_list]
-        return []
+        return self._check_node_in_attr_list(attribute_list)
     def get_channel_box_list(self):
         attribute_list = cmds.listAttr(str(self), channelBox=True)
-        if attribute_list:
-            return [self[x] for x in attribute_list]
-        return []
+        return self._check_node_in_attr_list(attribute_list)
 
-    def delete_node(self):
+    def delete_node(self, clean=True):
         """delete node
         """
-        
-        try:
+        if not self.obj_exists():
+            return
+        if not clean:
             cmds.delete(str(self))
-        except ValueError:
-            cmds.warning("{0} object not found".format(str(self)))
+
+        # delete history
+        cmds.delete(str(self), constructionHistory=True)
+        children = cmds.listRelatives(str(self), allDescendents=True)
+
+        all_children = [self]
+        if children is not None:
+            all_children.extend([Node(x) for x in children])
+
+        # unpublish
+        node_container = self.get_container()
+        if node_container is not None:
+            publish_attrs = node_container.get_published_attrs()
+            filter_publish_attrs = [x for x in publish_attrs if x.node == self]
+            for attr in filter_publish_attrs:
+                node_container.unpublish_attr(attr)
+
+        # loop from child to parent
+        for node in all_children[::-1]:
+            # if container delete outside connections
+            if node.node_type == "container":
+                self_container = Container(node=node)
+                connections = self_container.get_external_connection_list()
+                for _, dest in connections:
+                    ~dest
+
+            # delete connections
+            connections = node.get_connection_list(True, True)
+            for _, dest in connections:
+                ~dest
+
+            cmds.delete(str(node))
 
     def get_container(self):
         container = cmds.container(findContainer=self.full_name, query=True)
         if container is not None:
-            return Node(container)
+            return Container(container)
         return container
 
     def get_top_level_attribute_list(self, reCache=False):
@@ -241,7 +284,7 @@ class Node():
             Attr: returns Attr class of nodes attribute
         """
         if attr not in self.__attr_cache.keys():
-            self.__attr_cache[attr] = Attr(self, om_utils.get_plug(
+            self.__attr_cache[attr] = Attr(self, utils.get_plug(
                 self._dep_node, attr))
         return self.__attr_cache[attr]
     
@@ -267,7 +310,7 @@ class Container(Node):
     def __init__(self, node):
         super(Container, self).__init__(node)
 
-    def get_children(self):
+    def get_nodes(self):
         child_nodes = cmds.container(str(self), query=True, nodeList=True)
         if child_nodes:
             return [Node(x) for x in child_nodes]
@@ -307,17 +350,39 @@ class Container(Node):
     def __exit__(self, exception_type, exception_value, traceback):
         self.lock()
 
-    def add_node(self, add_nodes, include_network=True, include_hierarchy_above=True, include_hierarchy_below=True):
-        if isinstance(add_nodes, list):
-            for i in range(len(add_nodes)):
-                add_nodes[i] = str(add_nodes[i])
-        else:
-            add_nodes=str(add_nodes)
-        cmds.container(str(self), addNode=add_nodes, edit=True, iha=include_hierarchy_above, ihb=include_hierarchy_below, inc=include_network)
+    def add_nodes(self, *args, include_network=False, include_hierarchy_above=False, include_hierarchy_below=False, force=False):
+        args = [str(x) for x in args]
+        conversionNodes = []
+        for node in args:
+            node_conversionNodes = cmds.listConnections(node, source=True, destination=True)
+            node_conversionNodes = cmds.ls(node_conversionNodes, type='unitConversion')
+            conversionNodes.extend(node_conversionNodes)
+        args.extend(conversionNodes)
+        cmds.container(str(self), addNode=args, edit=True, iha=include_hierarchy_above, ihb=include_hierarchy_below, inc=include_network, force=force)
+
+    def get_container(self):
+        containers = cmds.container(str(self),  query=True, parentContainer=True)
+        if containers is not None:
+            return Container(containers[0])
+        return containers
+
+    def remove_nodes(self, *args):
+        args = [str(x) for x in args]
+        remove_list = args.copy()
+        for node in args:
+            curr_remove_nodes = cmds.listRelatives(node, allDescendents=True)
+            if curr_remove_nodes is not None:
+                remove_list.extend(curr_remove_nodes)
+        cmds.container(str(self), edit=True, removeNode=remove_list, force=True)
 
     def publish_attr(self, attr, attr_bind_name:str):
-        if attr.node in self.get_children():
+        if attr.node in self.get_nodes():
             cmds.container(str(self), edit=True, publishAndBind=[str(attr), attr_bind_name])
+        else:
+            raise RuntimeError("{} is not a node of container {}".format(attr.node, str(self)))
+
+    def unpublish_attr(self, attr):
+        cmds.container(str(self), edit=True, unbindAndUnpublish=str(attr))
 
     def get_published_attr_map(self):
 
@@ -336,12 +401,74 @@ class Container(Node):
             return [Attr(None, x) for x in plug_list]
         return []
 
+    def get_external_connection_list(self):
+        container_nodes = self.get_nodes()
+        connection_list = []
+
+        external_connection_list = cmds.container(str(self), query=True, connectionList=True)
+        if external_connection_list is None:
+            external_connection_list = []
+        for attr in external_connection_list:
+            curr_attr = Attr(None, attr)
+
+            if curr_attr.attr_type not in ["compound", "double3", "double2"] and curr_attr.__len__() is not None:
+                curr_attr = curr_attr[0]
+
+            input_connections = curr_attr.get_as_dest_connection_list()
+            output_connections = curr_attr.get_as_source_connection_list()
+            for input in input_connections:
+                if input.node in container_nodes:
+                    connection_list.append((input, curr_attr))
+            for output in output_connections:
+                if output.node in container_nodes:
+                    connection_list.append((curr_attr, output))
+        return connection_list
+
+    def get_child_containers(self, all=False):
+        sub_containers = [Container(x) for x in self.get_nodes() if x.node_type == "container"]
+        return_child_containers = []
+        if not all:
+            return sub_containers
+        for container in sub_containers:
+            container = Container(container)
+            return_child_containers.append(container)
+            return_child_containers.extend(container.get_child_containers(all=all))
+        return return_child_containers
+
     @classmethod
     def create_node(cls, name:str=None):
         node = super(Container, cls).create_node("container", name)
         node.__class__ = Container
         return node
 
+    def __setitem__(self, attr: str, new_value):
+        publish_attr_map = self.get_published_attr_map()
+        if attr in publish_attr_map.keys():
+            attr = publish_attr_map[attr]
+            attr.set(new_value)
+        else:
+            super().__setitem__(attr, new_value)
+
+    def __getitem__(self, attr: str):
+        publish_attr_map = self.get_published_attr_map()
+        if attr in publish_attr_map.keys():
+            return publish_attr_map[attr]
+        if attr.find("[") != -1 or attr.find(".") != -1:
+            if attr.find("[") != -1:
+                parent_attr, back_attrs = attr.split("[", 1)
+                index, back_attrs = back_attrs.split("]", 1)
+                if parent_attr in publish_attr_map.keys():
+                    return_attr = publish_attr_map[parent_attr][int(index)]
+                    if back_attrs != "":
+                        return return_attr[back_attrs]
+                    return return_attr
+            else:
+                parent_attr, back_attrs = attr.split(".", 1)
+                if parent_attr in publish_attr_map.keys():
+                    return publish_attr_map[parent_attr][back_attrs]
+        return super().__getitem__(attr)
+        
+    
 class AttrIter():
     """
     Iterator for attr. Iterates through child attrs at a depth equal
@@ -400,10 +527,6 @@ class AttrIter():
         
         # if at the end of list of attributes
         elif self.__current_attr__.index + 1 >= len(self.__current_attr__.parent):
-            # while self.__current_attr__.index + 1 >= len(self.__current_attr__.parent):
-            #     self.current_attr = self.current_attr.parent
-            #     if str(self.current_attr) == str(self.original_attr):
-            #             raise StopIteration
             for x in range(100):
                 if self.__current_attr__.index + 1 >= len(self.__current_attr__.parent):
                     self.__current_attr__ = self.__current_attr__.parent
@@ -472,7 +595,7 @@ class Attr():
         """
         self.node = node
         
-        self.plug = om_utils.get_plug(None, attr)
+        self.plug = utils.get_plug(None, attr)
         if self.plug is None:
             cmds.error("{} attribute\"s plug not found".format(attr))
 
@@ -492,7 +615,11 @@ class Attr():
         return str(self.plug.partialName())
     @property
     def attr_type(self):
-        return self._plug_attr_type(self.plug)
+        if cmds.getAttr(str(self), type=True) == "TdataCompound":
+            return "compound"
+        return cmds.getAttr(str(self), type=True)
+
+        # return self._plug_attr_type(self.plug)
     @property
     def value(self):
         return self._get_value(self.plug)
@@ -566,15 +693,27 @@ class Attr():
         if connection_pairs == []:
             cmds.warning("nothing to disconnect from {0}".format(str(self.plug)))
             return
-
+        locked = self.is_locked()
+        if locked:
+            self.set_locked(False)
         redo(connection_pairs)
         apiundo.commit(
             redo = lambda: redo(connection_pairs),
             undo = lambda: undo(connection_pairs)
         )
+        if locked:
+            self.set_locked(True)
     
+    def has_source_connection(self):
+        return self.is_connected()
+
     def get_plug(self):
         return self.plug
+    def is_connected(self, asSource=False, asDestination=True):
+        if self.get_connection_list(asSource, asDestination) == []:
+            return False
+        return True
+
     def get_connection_list(self, asSource: bool, asDestination: bool):
         """Get connections of attr
 
@@ -586,14 +725,14 @@ class Attr():
             om2.MPlug:
         """
         return [Attr(None, x) for x in self.plug.connectedTo(asDestination, asSource)]
-    def get_dest_connection_list(self):
+    def get_as_dest_connection_list(self):
         """Gets a list of all the Attr that are connected to this Attr
 
         Returns:
             list(Attr): 
         """
         return self.get_connection_list(False, True)
-    def get_source_connection_list(self):
+    def get_as_source_connection_list(self):
         """Gets a list of all the Attr that this Attr is connected to (this 
         Attr being the source)
 
@@ -628,8 +767,22 @@ class Attr():
             redo = lambda: do(self.plug, value),
             undo = lambda: do(self.plug, orig_val)
         )
-    def lock(self, lockAttr=True):
-        cmds.setAttr(str(self), lock=lockAttr)
+    def set_locked(self, lock):
+        cmds.setAttr(str(self), lock=lock)
+    def is_locked(self):
+        return cmds.getAttr(str(self), lock=True)
+    def set_keyable(self, keyable):
+        cmds.setAttr(str(self), edit=True, keyable=keyable)
+    def is_keyable(self):
+        return cmds.getAttr(str(self), keyable=True)
+    def set_alias(self, alias):
+        cmds.aliasAttr(alias, self.name)
+    def has_attr(self, sub_attr):
+        try:
+            self[sub_attr]
+            return True
+        except:
+            return False
     def _set_value(self, plug: om2.MPlug, value):
         """Sets value on plug. is recurrsive when plug is has children or
         elements. 
@@ -646,6 +799,9 @@ class Attr():
             value
         """
         attr_type = cmds.getAttr(str(self), type=True)
+        locked = self.is_locked()
+        if locked:
+            self.set_locked(False)
         if plug.isArray:
             for index in range(len(value)):
                 curr_plug = plug.elementByLogicalIndex(index)
@@ -665,6 +821,9 @@ class Attr():
             self.__attr_data_map__[self._plug_attr_type(plug)]["set"](plug, value)
         else:
             cmds.setAttr(str(self), value)
+
+        if locked:
+            self.set_locked(True)
 
     def _get_value(self, plug: om2.MPlug):
         """Gets value on plug. is recurrsive when plug is has children or
@@ -686,12 +845,12 @@ class Attr():
             return tuple(plug_list)
         elif self._plug_attr_type(plug) in self.__attr_data_map__.keys():
             return self.__attr_data_map__[self._plug_attr_type(plug)]["get"](plug)
-        else:
+        # else:
             # attr_type = cmds.getAttr(str(self), type=True)
-            return_value = cmds.getAttr(str(self))
+        return_value = cmds.getAttr(str(self))
             # if attr_type == "matrix":
             #     return_value = [return_value[i:i+4] for i in range(0, len(return_value), 4)]
-            return return_value
+        return return_value
     def __eq__(self, other):
         """Returns True if the other object is of type Attr and the 
         other's plug matches self's plug
@@ -727,7 +886,17 @@ class Attr():
             other ():
         """
         if isinstance(other, Attr):
-            om_utils.connect_plugs(self.plug, other.plug)
+            source_locked = self.is_locked()
+            dest_locked = other.is_locked()
+            if source_locked:
+                self.set_locked(False)
+            if dest_locked:
+                other.set_locked(False)
+            utils.connect_plugs(self.plug, other.plug)
+            if source_locked:
+                self.set_locked(True)
+            if dest_locked:
+                other.set_locked(True)
         else:
             cmds.error("{} not class Attr".format(other))
     def __lshift__(self, other):
@@ -739,7 +908,17 @@ class Attr():
             other ():
         """
         if isinstance(other, Attr):
-            om_utils.connect_plugs(other.plug, self.plug)
+            source_locked = other.is_locked()
+            dest_locked = self.is_locked()
+            if source_locked:
+                other.set_locked(False)
+            if dest_locked:
+                self.set_locked(False)
+            utils.connect_plugs(other.plug, self.plug)
+            if source_locked:
+                other.set_locked(True)
+            if dest_locked:
+                self.set_locked(True)
         else:
             cmds.error("{} not class Attr".format(other))
     def __invert__(self):
@@ -769,7 +948,7 @@ class Attr():
         if full_attr_name in self.node.get_attr_cache().keys():
             return self.node.get_attr_cache()[full_attr_name]
 
-        plug = om_utils.get_plug(self.plug, attr)
+        plug = utils.get_plug(self.plug, attr)
         return Attr(self.node, plug)
     
     def __setitem__(self, attr: str, new_value):
@@ -780,7 +959,7 @@ class Attr():
             new_value (): value to set attr to
         """
         attr = self.__getitem__(attr)
-        if isinstance(new_value, attr):
+        if isinstance(new_value, Attr):
             new_value = new_value.value
         attr.set(new_value)
 
@@ -799,7 +978,6 @@ class Attr():
             return self.plug.numElements()
         elif self.plug.isCompound:
             return self.plug.numChildren()
-        
     # Iterator overloads
     def __iter__(self):
         """Gets the iterator object
